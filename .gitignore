@@ -1,0 +1,23 @@
+# Secrets — never commit
+.env
+backend/.env
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+report.xml
+
+# Node / Next
+node_modules/
+.next/
+out/
+next-env.d.ts
+.vercel
+
+# Runtime state
+backend/data/workflows.json
+
+# OS
+.DS_Store

@@ -1,0 +1,88 @@
+# Rollback and governance policy for the Platform Walkthrough Agent.
+#
+# The failure mode that matters here is not a crash — it is a demo that quietly
+# degrades in front of a customer: narration that stops matching the screen, a
+# Q&A pause that never resumes, a plan that replays steps the customer already
+# saw. Those are the conditions below.
+
+apiVersion: harness.io/v1
+kind: GovernancePolicy
+metadata:
+  name: walkthrough-agent-rollback
+  identifier: walkthrough_agent_rollback
+  appliesTo:
+    - platform_walkthrough_agent
+
+spec:
+  rollback:
+    strategy: automatic
+    # A demo in progress finishes on the version it started with.
+    drainInFlightSessions: true
+    drainTimeoutMinutes: 20
+
+    triggers:
+      - name: health-check-failure
+        condition: "health_check.consecutive_failures >= 2"
+        window: 3m
+        action: rollback
+
+      - name: planning-failure-rate
+        # Falling back to the built-in plan is survivable once; as a pattern it
+        # means the doc parser is broken.
+        condition: "plan_fallback_rate > 0.25"
+        window: 15m
+        action: rollback
+
+      - name: stuck-pause
+        # The interruption handler paused and never released the gate. This is
+        # the worst possible live failure: the browser freezes mid-sentence.
+        condition: "paused_sessions_exceeding_seconds(120) > 0"
+        window: 5m
+        action: rollback
+
+      - name: step-execution-errors
+        condition: "step_action_failure_rate > 0.40"
+        window: 10m
+        action: rollback
+
+      - name: claude-error-rate
+        condition: "claude_api_error_rate > 0.15"
+        window: 10m
+        # Rate limits and transient 5xx resolve on their own; page first.
+        action: alert
+
+      - name: latency-regression
+        condition: "p95_question_answer_seconds > 12"
+        window: 10m
+        action: alert
+
+  versioning:
+    # Sessions pin to the skill version they started on.
+    pinSessionsToVersion: true
+    keepStableVersions: 3
+    promoteToStableAfter:
+      successfulSessions: 10
+      withoutRollbackFor: 24h
+
+  approvals:
+    # Major versions change what a customer sees; a human signs off.
+    requiredFor:
+      - version_major_bump
+      - governance_change
+      - allowed_domains_change
+    approverGroups:
+      - gtm_platform_admins
+
+  audit:
+    onRollback:
+      capture:
+        - triggering_condition
+        - failing_session_ids
+        - last_plan
+        - last_narration
+        - claude_error_samples
+      notify:
+        - channel: slack
+          target: "#gtm-solutions-engineering"
+        - channel: email
+          target: gtm-platform-admins@flytbase.com

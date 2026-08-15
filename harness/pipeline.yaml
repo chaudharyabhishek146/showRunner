@@ -1,0 +1,263 @@
+# Harness CI/CD — Platform Walkthrough Agent
+#
+# Three stages, in the order that matters:
+#   1. Build & Test    — the demo must be proven before it can be registered.
+#   2. Register Skill  — publish the versioned skill to the agent catalog.
+#   3. Deploy          — roll out behind a health gate, with automatic rollback.
+#
+# The pause/resume tests in stage 1 are the real gate. A walkthrough that
+# rewinds when a customer asks a question is worse than no demo at all, so that
+# behaviour is verified on every commit rather than rehearsed before each call.
+
+pipeline:
+  name: walkthrough-agent-delivery
+  identifier: walkthrough_agent_delivery
+  projectIdentifier: solutions_engineering
+  orgIdentifier: gtm
+
+  properties:
+    ci:
+      codebase:
+        connectorRef: account.github_connector
+        repoName: platform-walkthrough-agent
+        build: <+input>
+
+  variables:
+    - name: image_repo
+      type: String
+      value: <+account.dockerRegistry>/walkthrough-agent
+    - name: skill_version
+      type: String
+      value: 1.0.0
+
+  stages:
+    # ---------------------------------------------------------------- stage 1
+    - stage:
+        name: Build and Test
+        identifier: build_and_test
+        type: CI
+        spec:
+          cloneCodebase: true
+          platform:
+            os: Linux
+            arch: Amd64
+          runtime:
+            type: Cloud
+            spec: {}
+          execution:
+            steps:
+              - step:
+                  name: Install backend dependencies
+                  identifier: install_backend
+                  type: Run
+                  spec:
+                    shell: Sh
+                    image: python:3.12-slim
+                    command: |
+                      cd backend
+                      pip install --no-cache-dir -r requirements.txt
+
+              - step:
+                  name: Agent unit tests
+                  identifier: unit_tests
+                  type: Run
+                  spec:
+                    shell: Sh
+                    image: python:3.12-slim
+                    command: |
+                      cd backend
+                      pip install --no-cache-dir -r requirements.txt
+                      # Hermetic lane: no browser, no Claude calls, no network.
+                      # This is what gates the deploy.
+                      pytest -q -m "not integration" --junitxml=report.xml
+                    reports:
+                      type: JUnit
+                      spec:
+                        paths:
+                          - backend/report.xml
+
+              - step:
+                  name: Browser smoke test
+                  identifier: browser_smoke
+                  type: Run
+                  spec:
+                    shell: Sh
+                    image: mcr.microsoft.com/playwright/python:v1.49.0-jammy
+                    command: |
+                      cd backend
+                      pip install --no-cache-dir -r requirements.txt
+                      playwright install --with-deps chromium
+                      pytest -q -m integration
+                  # Chromium against live GitHub can fail for reasons that have
+                  # nothing to do with our change; it reports, it doesn't block.
+                  failureStrategies:
+                    - onFailure:
+                        errors: [AllErrors]
+                        action:
+                          type: MarkAsSuccess
+
+              - step:
+                  name: Frontend build
+                  identifier: frontend_build
+                  type: Run
+                  spec:
+                    shell: Sh
+                    image: node:20-alpine
+                    command: |
+                      cd frontend
+                      npm ci
+                      npm run typecheck
+                      npm run build
+
+              - step:
+                  name: Build and push image
+                  identifier: build_image
+                  type: BuildAndPushDockerRegistry
+                  spec:
+                    connectorRef: account.dockerhub_connector
+                    repo: <+pipeline.variables.image_repo>
+                    tags:
+                      - <+codebase.commitSha>
+                      - latest
+                    dockerfile: backend/Dockerfile
+                    context: .
+
+    # ---------------------------------------------------------------- stage 2
+    - stage:
+        name: Register Agent Skill
+        identifier: register_skill
+        type: Custom
+        spec:
+          execution:
+            steps:
+              - step:
+                  name: Validate skill definition
+                  identifier: validate_skill
+                  type: Run
+                  spec:
+                    shell: Sh
+                    image: harness/agent-cli:latest
+                    command: |
+                      harness agent-skill validate \
+                        --file harness/walkthrough-agent-skill.yaml \
+                        --strict
+
+              - step:
+                  name: Publish to agent catalog
+                  identifier: publish_skill
+                  type: Run
+                  spec:
+                    shell: Sh
+                    image: harness/agent-cli:latest
+                    command: |
+                      # Versioned publish: existing sessions stay pinned to the
+                      # version they started on, so a mid-call deploy can never
+                      # change the demo out from under a live customer.
+                      harness agent-skill publish \
+                        --file harness/walkthrough-agent-skill.yaml \
+                        --version <+pipeline.variables.skill_version> \
+                        --image <+pipeline.variables.image_repo>:<+codebase.commitSha> \
+                        --governance harness/rollback-policy.yaml
+
+    # ---------------------------------------------------------------- stage 3
+    - stage:
+        name: Deploy
+        identifier: deploy
+        type: Deployment
+        spec:
+          deploymentType: Kubernetes
+          service:
+            serviceRef: walkthrough_agent_service
+            serviceInputs:
+              serviceDefinition:
+                type: Kubernetes
+                spec:
+                  artifacts:
+                    primary:
+                      primaryArtifactRef: <+input>
+                      sources:
+                        - identifier: agent_image
+                          type: DockerRegistry
+                          spec:
+                            tag: <+codebase.commitSha>
+          environment:
+            environmentRef: production
+            deployToAll: false
+            infrastructureDefinitions:
+              - identifier: prod_cluster
+          execution:
+            steps:
+              - step:
+                  name: Rolling deploy
+                  identifier: rolling_deploy
+                  type: K8sRollingDeploy
+                  timeout: 10m
+                  spec:
+                    skipDryRun: false
+
+              - step:
+                  name: Health gate
+                  identifier: health_gate
+                  type: Http
+                  timeout: 3m
+                  spec:
+                    url: https://walkthrough-agent.internal/health
+                    method: GET
+                    assertion: |
+                      <+httpResponseCode> == 200 &&
+                      <+json.select("status", httpResponseBody)> == "ok" &&
+                      <+json.select("claude_configured", httpResponseBody)> == true &&
+                      <+json.select("product_doc_loaded", httpResponseBody)> == true
+
+              - step:
+                  name: Deploy frontend
+                  identifier: deploy_frontend
+                  type: Run
+                  spec:
+                    shell: Sh
+                    image: node:20-alpine
+                    command: |
+                      cd frontend
+                      npx vercel deploy --prod --token $VERCEL_TOKEN
+                    envVariables:
+                      VERCEL_TOKEN: <+secrets.getValue("vercel_token")>
+
+            rollbackSteps:
+              - step:
+                  name: Roll back workload
+                  identifier: rollback_workload
+                  type: K8sRollingRollback
+                  timeout: 10m
+                  spec: {}
+
+              - step:
+                  name: Roll back skill version
+                  identifier: rollback_skill
+                  type: Run
+                  spec:
+                    shell: Sh
+                    image: harness/agent-cli:latest
+                    command: |
+                      harness agent-skill rollback \
+                        --identifier platform_walkthrough_agent \
+                        --to-previous-stable
+
+              - step:
+                  name: Notify solutions engineering
+                  identifier: notify_rollback
+                  type: Run
+                  spec:
+                    shell: Sh
+                    image: curlimages/curl:latest
+                    command: |
+                      curl -sS -X POST "$SLACK_WEBHOOK" \
+                        -H 'Content-Type: application/json' \
+                        -d "{\"text\":\"Walkthrough agent rolled back to the last stable skill version (commit <+codebase.commitSha>). Demos are running on the previous build.\"}"
+                    envVariables:
+                      SLACK_WEBHOOK: <+secrets.getValue("slack_gtm_webhook")>
+
+        failureStrategies:
+          - onFailure:
+              errors: [AllErrors]
+              action:
+                type: StageRollback

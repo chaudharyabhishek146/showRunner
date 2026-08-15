@@ -1,0 +1,180 @@
+# Harness Worker Agent Skill — Platform Walkthrough Agent
+#
+# Registering the walkthrough as a Harness Agent Skill is what turns a demo
+# script into shared infrastructure: it is versioned, RBAC-governed, and
+# callable by any team from the catalog. A solutions engineer in another region
+# invokes the same skill rather than rebuilding the demo.
+
+apiVersion: harness.io/v1
+kind: AgentSkill
+metadata:
+  name: platform-walkthrough-agent
+  identifier: platform_walkthrough_agent
+  version: 1.0.0
+  orgIdentifier: gtm
+  projectIdentifier: solutions_engineering
+  description: >-
+    Runs a live, narrated product walkthrough in a real browser. Reads a product
+    document, plans the demo, drives the UI, and answers customer questions
+    mid-flight without losing its place.
+  labels:
+    domain: gtm
+    surface: browser-automation
+    maturity: ga
+  owner: gtm-solutions-engineering
+  tags:
+    - demo
+    - onboarding
+    - browser-agent
+    - customer-facing
+
+spec:
+  triggerPhrases:
+    - "run the product walkthrough"
+    - "demo the issue-to-board workflow"
+    - "walk this customer through the platform"
+    - "show me how {feature} works"
+
+  model:
+    provider: anthropic
+    # Opus 5 handles the planning pass and the grounded mid-demo Q&A; both are
+    # judgement calls in front of a customer, so we do not trade quality here.
+    id: claude-opus-5
+    maxTokens: 8000
+    # NOTE: `temperature` is intentionally absent. It is rejected with a 400 on
+    # Opus 5 / Sonnet 5 / Opus 4.7+. Do not reintroduce it on this model.
+    thinking:
+      type: adaptive
+    promptCaching:
+      enabled: true
+      # The product doc is identical across every narration and Q&A call.
+      cacheKeys:
+        - product_doc
+
+  inputs:
+    - name: product_doc_path
+      type: string
+      required: true
+      default: backend/data/product_doc.md
+      description: The teaching document the agent narrates and answers from.
+    - name: target_url
+      type: string
+      required: true
+      default: https://github.com
+      description: Root URL of the platform being demonstrated.
+    - name: workflow_name
+      type: string
+      required: false
+      description: >-
+        Recall a previously planned walkthrough by name instead of re-planning.
+    - name: voice_enabled
+      type: boolean
+      required: false
+      default: true
+      description: Read narration aloud in the viewer's browser.
+
+  outputs:
+    - name: steps_completed
+      type: number
+    - name: questions_answered
+      type: number
+    - name: transcript
+      type: string
+      description: Full narration and Q&A log for post-call follow-up.
+
+  instructions:
+    - phase: planning
+      prompt: |
+        Read the product document at {{ inputs.product_doc_path }}. Produce a
+        5-step walkthrough where every step demonstrates one concept from the
+        doc through actions a browser can actually perform.
+
+        Emit the plan as structured output matching the StepPlan schema. Use
+        only the allowed action vocabulary (navigate, click, fill, press, wait,
+        highlight) and address elements by ARIA role plus accessible name —
+        never CSS or XPath. Pre-generate the narration for all steps before
+        execution begins so playback never stalls on an API round trip.
+
+    - phase: execution
+      prompt: |
+        Execute the plan against {{ inputs.target_url }}, one step at a time.
+        Emit narration, then the actions, then a screenshot of the result.
+        Never navigate outside the allowed domains. Never enter credentials,
+        never change account settings, never delete anything.
+
+    - phase: interruption
+      prompt: |
+        When a viewer asks a question, freeze execution at the current step
+        immediately. Answer in 2-4 sentences using the product document and the
+        current screenshot as grounding. If the document does not cover the
+        question, say so and offer to follow up — do not speculate.
+
+        Then resume from the exact step you paused on. Never restart the
+        walkthrough and never skip the step you were mid-way through.
+
+        If the viewer is steering the demo rather than asking a question
+        ("skip to the board", "show labels instead"), re-plan only the
+        remaining steps. Completed steps are never replayed.
+
+  runtime:
+    type: cloud-container
+    image: harness/walkthrough-agent:latest
+    resources:
+      cpu: 2
+      memory: 4Gi
+    timeoutMinutes: 20
+    healthCheck:
+      path: /health
+      intervalSeconds: 15
+
+  tools:
+    - name: playwright-browser
+      type: builtin
+      config:
+        engine: chromium
+        headless: true
+        viewport: { width: 1440, height: 900 }
+    - name: github-mcp
+      type: mcp
+      server: github
+      # Read-only scopes: the demo creates issues through the UI, which is what
+      # the customer needs to see. It has no reason to hold write tokens.
+      permissions:
+        - repo:read
+        - issues:read
+        - projects:read
+
+  governance:
+    rbac:
+      execute:
+        - gtm_solutions_engineering
+        - gtm_sales_engineering
+      edit:
+        - gtm_platform_admins
+      publish:
+        - gtm_platform_admins
+    audit:
+      enabled: true
+      # Every customer-facing run is replayable after the call.
+      capture:
+        - plan
+        - narration
+        - questions
+        - answers
+        - screenshots
+      retentionDays: 90
+    allowedDomains:
+      - github.com
+      - "*.github.com"
+    deniedActions:
+      - credential_entry
+      - account_settings_change
+      - payment
+      - delete_repository
+      - delete_issue
+    secrets:
+      # Values live in the Harness secret manager and are injected at runtime.
+      - name: ANTHROPIC_API_KEY
+        ref: account.anthropic_api_key
+      - name: GITHUB_SESSION_COOKIE
+        ref: org.demo_github_session
