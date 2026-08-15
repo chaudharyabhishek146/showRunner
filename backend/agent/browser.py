@@ -27,6 +27,8 @@ import time
 from pathlib import Path
 from urllib.parse import urlparse
 
+import httpx
+
 from playwright.async_api import (
     Browser,
     BrowserContext,
@@ -159,6 +161,48 @@ async def chrome_port_open(timeout: float = 1.0) -> bool:
         return True
     except (OSError, asyncio.TimeoutError):
         return False
+
+
+def _cdp_base() -> str:
+    parsed = urlparse(config.CHROME_CDP_URL)
+    return f"http://{parsed.hostname or 'localhost'}:{parsed.port or 9222}"
+
+
+async def chrome_page_count() -> int | None:
+    """How many page targets the debug endpoint reports. None if unreachable.
+
+    Plain HTTP, no Playwright driver. Worth asking before attaching, because
+    zero is a state that looks perfectly healthy from outside and then fails
+    the handshake.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as http:
+            targets = (await http.get(f"{_cdp_base()}/json/list")).json()
+    except (httpx.HTTPError, ValueError):
+        return None
+    return sum(1 for t in targets if t.get("type") == "page")
+
+
+async def open_chrome_window(url: str = "about:blank") -> bool:
+    """Ask a window-less Chrome to open a tab, over the CDP HTTP endpoint.
+
+    On macOS, closing the last window leaves Chrome *running* with no browser
+    context at all. The debug port still answers, so everything looks fine —
+    but attaching fails with "Browser context management is not supported",
+    which is an unhelpful way to say "there are no windows". Rather than send
+    the presenter off to open one mid-demo, open one for them.
+    """
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as http:
+            # PUT, not GET: Chrome 111+ rejects GET on /json/new.
+            response = await http.put(f"{_cdp_base()}/json/new?{url}")
+            opened = response.status_code == 200 and "id" in response.json()
+    except (httpx.HTTPError, ValueError):
+        return False
+    if opened:
+        log.info("Chrome had no windows open — opened one at %s", url)
+        await asyncio.sleep(1.0)  # let the new target register
+    return opened
 
 
 async def launch_user_chrome(url: str = "") -> bool:
@@ -335,6 +379,18 @@ class BrowserSession:
         open. Off by default for the same reason: only the act of starting a
         demo should be allowed to open a window on the presenter's screen.
         """
+        # A closed port is the normal state on a deployed backend, where there
+        # is no browser at all and this gets polled. Answer from a socket check
+        # instead of spawning a Playwright driver to rediscover it every time.
+        if attach_only and config.ATTACH_TO_CHROME and not await chrome_port_open():
+            return self._no_chrome_note()
+
+        # A running Chrome with every window closed still answers on the debug
+        # port, but has no browser context — and the attach fails with an error
+        # that says nothing about windows. Give it a tab first.
+        if config.ATTACH_TO_CHROME and await chrome_page_count() == 0:
+            await open_chrome_window(url or "about:blank")
+
         self._pw = await async_playwright().start()
 
         if config.ATTACH_TO_CHROME:
@@ -358,10 +414,7 @@ class BrowserSession:
                     log.info("Not auto-launching Chrome: %s", why_not)
 
         if attach_only:
-            return (
-                "Not connected to your Chrome. Start it with:\n"
-                f"{chrome_launch_hint()}"
-            )
+            return self._no_chrome_note()
 
         await self._launch()
         return (
@@ -369,6 +422,21 @@ class BrowserSession:
             "signed-in product, quit Chrome and start it with:\n"
             f"{chrome_launch_hint()}"
         )
+
+    def _no_chrome_note(self) -> str:
+        """Why we have no browser, phrased for wherever this is running.
+
+        On a laptop the answer is a command to run. On a deployed backend it
+        never can be: the presenter's Chrome is on their machine, and the
+        DevTools port is not something to expose across the internet.
+        """
+        if not chrome_binary():
+            return (
+                "This backend has no browser and can't reach yours — your Chrome "
+                "runs on your machine, and its debug port is not safe to expose "
+                "publicly. Run the backend locally to drive your own browser."
+            )
+        return f"Not connected to your Chrome. Start it with:\n{chrome_launch_hint()}"
 
     async def _attach(self) -> str | None:
         """Join the running Chrome over CDP. Returns a note, or None on failure."""
@@ -380,12 +448,20 @@ class BrowserSession:
             detail = str(exc).splitlines()[0]
             log.warning("Could not attach to Chrome at %s (%s)", config.CHROME_CDP_URL, detail)
             if "context management" in detail:
-                # Distinctive enough to name precisely: the port is open and
-                # answering, Chrome is just refusing to be driven.
-                log.warning(
-                    "Chrome is running without --enable-automation. Restart it with:\n%s",
-                    chrome_launch_hint(),
-                )
+                # Two very different causes share this message. Zero windows is
+                # by far the more common one, and the only one the presenter
+                # can fix in a second.
+                if await chrome_page_count() == 0:
+                    log.warning(
+                        "Chrome is running with no windows open. Open any tab in "
+                        "it, or quit it and let the agent relaunch it."
+                    )
+                else:
+                    log.warning(
+                        "Chrome is refusing to be driven — it may be running "
+                        "without --enable-automation. Restart it with:\n%s",
+                        chrome_launch_hint(),
+                    )
             return None
 
         contexts = self._browser.contexts

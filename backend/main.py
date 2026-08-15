@@ -20,6 +20,7 @@ from agent import config, docs, memory
 from agent.browser import (
     BrowserSession,
     can_auto_launch,
+    chrome_binary,
     chrome_launch_hint,
     chrome_port_open,
 )
@@ -129,27 +130,39 @@ async def tabs() -> dict:
         await session.start(attach_only=True)
         if not session.attached:
             can_launch, _ = can_auto_launch()
-            hint = (
-                # The common case on a laptop: nothing to do by hand.
-                "Chrome isn't listening on the debug port yet. Starting a "
-                "walkthrough will open one for you — it's a separate demo "
-                "profile, so sign in there once when it appears."
-                if can_launch
-                else
-                # Deployed, or Chrome installed somewhere we couldn't find:
-                # the presenter has to run it themselves.
-                "Can't drive your Chrome yet — it's running without a debug "
-                "port. Paste the command below into a terminal. It opens a "
-                "second Chrome window on its own profile, so you don't have to "
-                "quit the one you're using. Sign into the product you want to "
-                "demo in that window, then reload this page."
-            )
+            # No Chrome on this machine at all means this is a server, not the
+            # presenter's laptop — and no command they can run will bridge
+            # that, so don't offer one.
+            remote = not chrome_binary()
+            if remote:
+                hint = (
+                    "This backend is deployed, so it can't reach your Chrome — "
+                    "your browser runs on your machine, and its debug port is "
+                    "not something to expose to the internet. Run the backend "
+                    "locally (uvicorn main:app --port 8000) and point the app "
+                    "at it to drive your own browser."
+                )
+            elif can_launch:
+                hint = (
+                    "Chrome isn't listening on the debug port yet. Starting a "
+                    "walkthrough will open one for you — it's a separate demo "
+                    "profile, so sign in there once when it appears."
+                )
+            else:
+                hint = (
+                    "Can't drive your Chrome yet — it's running without a debug "
+                    "port. Paste the command below into a terminal. It opens a "
+                    "second Chrome window on its own profile, so you don't have "
+                    "to quit the one you're using. Sign into the product you "
+                    "want to demo in that window, then reload this page."
+                )
             return {
                 "attached": False,
                 "tabs": [],
                 "hint": hint,
                 "auto_launch": can_launch,
-                "command": chrome_launch_hint(),
+                "remote_backend": remote,
+                "command": "" if remote else chrome_launch_hint(),
             }
         found = await session.list_tabs()
         return {

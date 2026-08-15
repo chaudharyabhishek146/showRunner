@@ -23,6 +23,8 @@ export interface TabsResponse {
   hint: string;
   /** True when starting a demo can open Chrome itself. */
   auto_launch?: boolean;
+  /** True when the backend is deployed and can never reach your browser. */
+  remote_backend?: boolean;
   command?: string;
 }
 

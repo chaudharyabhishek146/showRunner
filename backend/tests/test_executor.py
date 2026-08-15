@@ -490,6 +490,42 @@ async def test_url_guessing_only_covers_product_names():
     assert guess_url("demo") is None
 
 
+async def test_no_chrome_note_is_honest_about_a_deployed_backend(monkeypatch):
+    """A server can never reach the presenter's browser — don't offer a command.
+
+    On a deployed backend the CDP port points at the container's own localhost,
+    where nothing is listening and nothing ever will be. Telling the presenter
+    to run a Chrome command there would be advice that cannot work.
+    """
+    from agent.browser import BrowserSession
+
+    session = BrowserSession()
+
+    monkeypatch.setattr("agent.browser.chrome_binary", lambda: "")
+    remote = session._no_chrome_note()
+    assert "deployed" in remote or "Run the backend locally" in remote
+    assert "--remote-debugging-port" not in remote
+
+    monkeypatch.setattr(
+        "agent.browser.chrome_binary", lambda: "/Applications/Chrome"
+    )
+    local = session._no_chrome_note()
+    assert "--remote-debugging-port" in local
+
+
+async def test_attach_only_never_spawns_a_driver_when_the_port_is_closed(monkeypatch):
+    """The tab picker is polled. A closed port must cost a socket, not a driver."""
+    from agent import browser as browser_mod
+
+    monkeypatch.setattr("agent.config.CHROME_CDP_URL", "http://localhost:9")
+    monkeypatch.setattr(browser_mod, "chrome_binary", lambda: "")
+    session = browser_mod.BrowserSession()
+
+    await session.start(attach_only=True)
+    assert session._pw is None, "Playwright was started just to fail"
+    assert not session.attached
+
+
 async def test_auto_launch_refuses_anything_but_this_machine(monkeypatch):
     """A deployed backend must never try to open a browser on the server."""
     monkeypatch.setattr("agent.config.AUTO_LAUNCH_CHROME", True)
