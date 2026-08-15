@@ -8,7 +8,7 @@ COPY requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt \
     && playwright install --with-deps chromium
 
-COPY backend/ ./
+COPY . ./
 
 ENV PYTHONUNBUFFERED=1 \
     HEADLESS=true \
