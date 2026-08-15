@@ -10,10 +10,13 @@ interface Props {
   onAsk: (text: string) => void;
 }
 
+// Product-neutral on purpose: one of these asks a question, one redirects the
+// demo, one probes the doc's limits — the three things worth showing an
+// audience, whatever product is on screen.
 const SUGGESTIONS = [
-  "Can one issue live on two boards?",
-  "How is this different from labels?",
-  "Skip ahead to the project board",
+  "What am I looking at here?",
+  "Show me how to filter the results",
+  "Does this sync across devices?",
 ];
 
 /** The left half: narration as it's spoken, plus the interrupt box. */

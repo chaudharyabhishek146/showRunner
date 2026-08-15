@@ -1,0 +1,11 @@
+{
+  "name": "showrunner-docs",
+  "private": true,
+  "description": "Generators for the build report (PDF) and the pitch deck (PPTX).",
+  "scripts": {
+    "deck": "node build_deck.js"
+  },
+  "dependencies": {
+    "pptxgenjs": "^4.0.1"
+  }
+}

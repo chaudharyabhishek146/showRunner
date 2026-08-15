@@ -31,7 +31,7 @@ metadata:
 spec:
   triggerPhrases:
     - "run the product walkthrough"
-    - "demo the issue-to-board workflow"
+    - "demo {flow} in the {product} tab"
     - "walk this customer through the platform"
     - "show me how {feature} works"
 
@@ -52,16 +52,26 @@ spec:
         - product_doc
 
   inputs:
-    - name: product_doc_path
+    - name: product_doc
       type: string
       required: true
-      default: backend/data/product_doc.md
-      description: The teaching document the agent narrates and answers from.
-    - name: target_url
+      description: >-
+        The document this demo is planned and narrated from — an upload id from
+        POST /document, or the document text itself. Supplied per run; the skill
+        is not bound to any one product.
+    - name: demo_focus
       type: string
       required: true
-      default: https://github.com
-      description: Root URL of the platform being demonstrated.
+      description: >-
+        What to show, in the presenter's own words: "the issue triage flow",
+        "how a viewer builds a playlist". Free text, not an enum.
+    - name: tab_hint
+      type: string
+      required: false
+      description: >-
+        Which of the presenter's open browser tabs to demo in — a product name,
+        a host, or a full URL to open. Empty means the foreground tab. The
+        navigation allowlist is derived from whatever this resolves to.
     - name: workflow_name
       type: string
       required: false
@@ -83,24 +93,38 @@ spec:
       description: Full narration and Q&A log for post-call follow-up.
 
   instructions:
+    - phase: targeting
+      prompt: |
+        Attach to the presenter's running Chrome over the DevTools protocol and
+        list the open tabs. Pick the one that best answers
+        {{ inputs.tab_hint }}. If nothing scores above the match threshold, stop
+        and show the tab list — never guess in front of a customer. If the hint
+        is a URL rather than a description, open it in a new tab.
+
+        Derive the navigation allowlist from the chosen tab: its host, its
+        registrable domain, and nothing else unless EXTRA_ALLOWED_HOSTS says so.
+
     - phase: planning
       prompt: |
-        Read the product document at {{ inputs.product_doc_path }}. Produce a
-        5-step walkthrough where every step demonstrates one concept from the
-        doc through actions a browser can actually perform.
+        Read {{ inputs.product_doc }} and the accessibility outline of the page
+        that is actually on screen. Produce a 4-6 step walkthrough of
+        {{ inputs.demo_focus }} where every step demonstrates one concept from
+        the document using controls that exist on that page.
 
         Emit the plan as structured output matching the StepPlan schema. Use
         only the allowed action vocabulary (navigate, click, fill, press, wait,
         highlight) and address elements by ARIA role plus accessible name —
-        never CSS or XPath. Pre-generate the narration for all steps before
-        execution begins so playback never stalls on an API round trip.
+        never CSS or XPath, and never a selector you did not see in the outline.
+        Pre-generate the narration for all steps before execution begins so
+        playback never stalls on an API round trip.
 
     - phase: execution
       prompt: |
-        Execute the plan against {{ inputs.target_url }}, one step at a time.
-        Emit narration, then the actions, then a screenshot of the result.
-        Never navigate outside the allowed domains. Never enter credentials,
-        never change account settings, never delete anything.
+        Execute the plan in the selected tab, one step at a time. Emit
+        narration, then the actions, then a screenshot of the result. Never
+        navigate outside the allowlist derived in the targeting phase. Prefer
+        showing over changing: never enter credentials, never change account
+        settings, never delete, send, publish, or pay.
 
     - phase: interruption
       prompt: |
@@ -131,18 +155,16 @@ spec:
     - name: playwright-browser
       type: builtin
       config:
+        # Attach to the presenter's own Chrome rather than launching a clean
+        # profile: their existing sign-ins are the authentication story, which
+        # is why this skill holds no product credentials at all.
+        attach:
+          protocol: cdp
+          url: http://localhost:9222
+        # Only used if the attach fails and we fall back to launching.
         engine: chromium
         headless: true
         viewport: { width: 1440, height: 900 }
-    - name: github-mcp
-      type: mcp
-      server: github
-      # Read-only scopes: the demo creates issues through the UI, which is what
-      # the customer needs to see. It has no reason to hold write tokens.
-      permissions:
-        - repo:read
-        - issues:read
-        - projects:read
 
   governance:
     rbac:
@@ -164,17 +186,21 @@ spec:
         - screenshots
       retentionDays: 90
     allowedDomains:
-      - github.com
-      - "*.github.com"
+      # Derived per run from the tab the presenter picked — its host plus its
+      # registrable domain. A static list here would either be too narrow to
+      # demo anything or wide enough to be meaningless. Add standing exceptions
+      # (a shared docs site, an SSO provider) via EXTRA_ALLOWED_HOSTS.
+      mode: derived-from-selected-tab
+      extra: []
     deniedActions:
       - credential_entry
       - account_settings_change
       - payment
-      - delete_repository
-      - delete_issue
+      - destructive_write   # delete, archive, revoke — anything unrecoverable
+      - outbound_send       # send, publish, invite, post
     secrets:
       # Values live in the Harness secret manager and are injected at runtime.
+      # There is exactly one: product authentication comes from the presenter's
+      # attached browser session, never from a stored cookie or password.
       - name: ANTHROPIC_API_KEY
         ref: account.anthropic_api_key
-      - name: GITHUB_SESSION_COOKIE
-        ref: org.demo_github_session

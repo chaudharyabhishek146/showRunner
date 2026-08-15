@@ -4,6 +4,7 @@ import type { RunStatus } from "@/lib/types";
 
 interface Props {
   screenshot: string | null;
+  screenshotMime: string;
   caption: string;
   currentUrl: string;
   status: RunStatus;
@@ -17,6 +18,7 @@ interface Props {
  */
 export default function BrowserPanel({
   screenshot,
+  screenshotMime,
   caption,
   currentUrl,
   status,
@@ -31,7 +33,7 @@ export default function BrowserPanel({
           {currentUrl || "about:blank"}
         </span>
         <span className={`browser__badge browser__badge--${status}`}>
-          {status === "paused" ? "PAUSED" : status.toUpperCase()}
+          {status === "pausing" ? "PAUSING…" : status.toUpperCase()}
         </span>
       </header>
 
@@ -39,7 +41,7 @@ export default function BrowserPanel({
         {screenshot ? (
           <img
             className="browser__frame"
-            src={`data:image/png;base64,${screenshot}`}
+            src={`data:${screenshotMime};base64,${screenshot}`}
             alt={caption || "Live browser view"}
           />
         ) : (
@@ -52,6 +54,12 @@ export default function BrowserPanel({
         {status === "paused" && screenshot && (
           <div className="browser__freeze">
             <span>Holding position while I answer</span>
+          </div>
+        )}
+
+        {status === "pausing" && screenshot && (
+          <div className="browser__freeze browser__freeze--soft">
+            <span>Finishing the current action…</span>
           </div>
         )}
       </div>

@@ -48,14 +48,31 @@ attached as an image.
 
 Answer in 2-4 sentences, grounded in the product doc and in what is visible on \
 screen. If the doc does not cover it, say so plainly and offer to follow up — \
-do not speculate about roadmap or invent behaviour. Close by pointing back to \
-where the demo is about to resume.
+do not speculate about roadmap or invent behaviour.
 
-Also judge whether they were asking a *question* or steering the *demo*. Set \
-`wants_plan_change` to true only when they asked to see something different \
-("skip ahead to the board", "can you show labels instead") — never for a \
-plain question about what is already on screen. When it is true, put what they \
-want to see into `requested_focus`.
+Then decide what should happen on screen next. You are driving a real browser, \
+so anything you could describe you can instead perform, and performing it is \
+almost always the better answer.
+
+Set `wants_plan_change` to TRUE whenever the customer wants to *see* something \
+— whether they phrase it as an instruction or a question:
+  - "show me how to filter the data"      -> demonstrate filtering
+  - "how do I share this with my team?"   -> demonstrate sharing
+  - "can you skip ahead to the board"     -> go to the board
+  - "what about labels instead"           -> switch to labels
+"Show me how to X", "how do I X", and "can it do X" are all requests to be \
+shown X. Do not answer them with written instructions when the controls are on \
+the screen in front of you — that is the one thing a live demo exists to avoid.
+
+Set it to FALSE only when there is genuinely nothing to show: a question about \
+what is already visible ("what's that number?"), about pricing or policy, about \
+something the product doc says the product cannot do, or about anything whose \
+controls are outside this demo's scope.
+
+When it is TRUE, put the thing to demonstrate into `requested_focus` as a short \
+phrase ("filtering the data by status"), and write the answer as the sentence \
+you would actually say before doing it — "Let me show you" rather than a list \
+of steps the customer is meant to follow themselves.
 """
 
 
@@ -136,12 +153,20 @@ async def answer_question(
         )
 
     current = plan.steps[step_index] if 0 <= step_index < len(plan.steps) else None
-    where = (
-        f"Currently on step {current.id} of {len(plan.steps)}: {current.title} "
-        f"(demonstrating: {current.doc_reference})."
-        if current
-        else "The walkthrough has not started yet."
-    )
+    if current:
+        where = (
+            f"Currently on step {current.id} of {len(plan.steps)}: {current.title} "
+            f"(demonstrating: {current.doc_reference})."
+        )
+    elif step_index >= len(plan.steps):
+        # The closing question window. Saying "we haven't started" here would
+        # be both wrong and the last thing the customer hears.
+        where = (
+            f"All {len(plan.steps)} steps are finished and you are taking "
+            "closing questions. The last screen of the demo is still up."
+        )
+    else:
+        where = "The walkthrough has not started yet."
 
     content: list[dict] = []
     if screenshot_b64:

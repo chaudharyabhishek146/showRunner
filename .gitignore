@@ -18,6 +18,8 @@ next-env.d.ts
 
 # Runtime state
 backend/data/workflows.json
+# Whatever the presenter uploaded — their product docs, not ours.
+backend/data/uploads/
 
 # OS
 .DS_Store

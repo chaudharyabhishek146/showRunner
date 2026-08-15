@@ -5,11 +5,14 @@ export type ServerEventType =
   | "step_start"
   | "narration"
   | "screenshot"
+  | "frame"
   | "step_done"
   | "answer"
   | "status"
   | "error"
-  | "complete";
+  | "complete"
+  | "tabs"
+  | "prompt";
 
 export interface ServerEvent {
   type: ServerEventType;
@@ -33,6 +36,50 @@ export interface Plan {
   steps: Step[];
 }
 
+/** One open tab in the presenter's Chrome — a candidate demo surface. */
+export interface TabInfo {
+  index: number;
+  title: string;
+  url: string;
+  host: string;
+  active: boolean;
+}
+
+export interface DocumentSummary {
+  id: string;
+  name: string;
+  chars: number;
+  uploaded_at: string;
+  preview: string;
+}
+
+/** What the presenter supplies to define a demo. All of it is per-run. */
+export interface DemoRequest {
+  doc_id: string;
+  focus: string;
+  tab: string;
+  /** Inline text, for a document that was pasted rather than uploaded. */
+  doc?: string;
+  /** Replay a remembered walkthrough instead of planning a fresh one. */
+  workflow?: string;
+}
+
+/** A question the agent is waiting on the presenter to answer, with buttons. */
+export interface AgentPrompt {
+  id: string;
+  question: string;
+  options: string[];
+}
+
+/** What this build is configured to demo, and whether that's fixed. */
+export interface DemoConfig {
+  locked: boolean;
+  title: string;
+  focus: string;
+  tab: string;
+  sample: string;
+}
+
 export type StepStatus = "pending" | "active" | "done";
 
 export interface ChatMessage {
@@ -48,6 +95,7 @@ export type RunStatus =
   | "idle"
   | "planning"
   | "running"
+  | "pausing"
   | "paused"
   | "done"
   | "stopped"

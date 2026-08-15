@@ -88,8 +88,9 @@ pipeline:
                       pip install --no-cache-dir -r requirements.txt
                       playwright install --with-deps chromium
                       pytest -q -m integration
-                  # Chromium against live GitHub can fail for reasons that have
-                  # nothing to do with our change; it reports, it doesn't block.
+                  # This one drives a real browser against a live site, so it
+                  # can fail for reasons that have nothing to do with our
+                  # change; it reports, it doesn't block.
                   failureStrategies:
                     - onFailure:
                         errors: [AllErrors]
