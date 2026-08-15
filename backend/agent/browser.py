@@ -343,6 +343,14 @@ class TabNotFound(RuntimeError):
     """Raised when the user's description doesn't match any open tab."""
 
 
+class NoBrowserAvailable(RuntimeError):
+    """Raised when attaching was requested and there is nothing to attach to.
+
+    Carries a sentence written for the presenter, not a stack trace — this is
+    the one they will read on stage.
+    """
+
+
 class BrowserSession:
     """Owns the agent's connection to a browser for one walkthrough."""
 
@@ -412,6 +420,14 @@ class BrowserSession:
                             )
                 else:
                     log.info("Not auto-launching Chrome: %s", why_not)
+
+            # Attaching was asked for and did not work. Do not quietly launch a
+            # browser instead: it has none of the presenter's logins, and on a
+            # server there is no display to put it on — which surfaces as a wall
+            # of Playwright text about missing X servers rather than as the one
+            # sentence that explains the problem. ATTACH_TO_CHROME=false is the
+            # way to ask for a launched browser on purpose.
+            raise NoBrowserAvailable(self._no_chrome_note())
 
         if attach_only:
             return self._no_chrome_note()
@@ -595,6 +611,12 @@ class BrowserSession:
     async def select_tab(self, hint: str) -> TabInfo:
         """Focus the tab the user asked for, opening one if they named a URL.
 
+        An existing tab is always preferred — a matching tab is adopted where it
+        stands, and an empty hint means "whatever is in front of me". A new tab
+        is only ever opened when the hint names a URL that nothing on screen
+        matches, and OPEN_NEW_TABS turns even that off in favour of navigating
+        the current tab.
+
         Raises TabNotFound with the actual tab list, because "no matching tab"
         is only useful if it tells the presenter what they *do* have open.
         """
@@ -607,6 +629,23 @@ class BrowserSession:
                 raise TabNotFound(
                     f"No open tab matches {hint!r}. Open tabs:\n{describe(tabs)}"
                 )
+            if not config.OPEN_NEW_TABS and tabs:
+                # Reuse the foreground tab rather than adding to the presenter's
+                # window. Their tab strip is theirs.
+                current = match_tab(tabs, "")
+                if current is not None:
+                    page = self._tab_pages[current.index]
+                    await self._adopt(page)
+                    log.info("Navigating the current tab to %s", url)
+                    await page.goto(url, wait_until="domcontentloaded")
+                    self.allowed_hosts = self._scope_for(page.url)
+                    return TabInfo(
+                        index=current.index,
+                        title=await page.title(),
+                        url=page.url,
+                        host=urlparse(page.url).hostname or "",
+                        active=True,
+                    )
             return await self.open_tab(url)
 
         page = self._tab_pages[chosen.index]

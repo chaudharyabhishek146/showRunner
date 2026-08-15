@@ -14,7 +14,13 @@ import logging
 from collections.abc import Awaitable, Callable
 
 from . import config, doc_parser, docs, memory, narrator
-from .browser import BrowserSession, TabNotFound, chrome_port_open
+from .browser import (
+    BrowserSession,
+    NoBrowserAvailable,
+    TabNotFound,
+    can_auto_launch,
+    chrome_port_open,
+)
 from .models import DemoRequest, ServerEvent, StepPlan, TabInfo
 from .step_executor import RunState, StepExecutor
 from .tabs import guess_url
@@ -103,7 +109,10 @@ class WalkthroughSession:
             return "Already connected."
 
         opening = guess_url(tab_hint) if auto_launch else None
-        if auto_launch and not await chrome_port_open():
+        # Only promise a launch we can actually perform — on a deployed backend
+        # there is no Chrome to start, and saying otherwise sends the presenter
+        # looking for a window that will never appear.
+        if auto_launch and can_auto_launch()[0] and not await chrome_port_open():
             await self.emit(
                 ServerEvent(
                     type="status",
@@ -212,7 +221,11 @@ class WalkthroughSession:
 
         # The only place auto-launch is allowed: the presenter just asked for a
         # demo, so opening a browser window is what they expect to happen.
-        await self.ensure_browser(tab_hint=request.tab, auto_launch=True)
+        try:
+            await self.ensure_browser(tab_hint=request.tab, auto_launch=True)
+        except NoBrowserAvailable as exc:
+            await self.emit(ServerEvent(type="error", text=str(exc)))
+            return
 
         await self.emit(
             ServerEvent(

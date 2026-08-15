@@ -353,6 +353,32 @@ async def test_tab_matching_picks_the_named_product():
     assert match_tab(_tabs(), "showRunner").index == 1
 
 
+async def test_a_named_host_never_matches_on_its_tld():
+    """"salesforce.com" must not match a YouTube tab because both end in .com.
+
+    Token scoring exists for descriptive hints ("the youtube one"). A hint that
+    names a host is precise, and letting "com" score against every open tab
+    turns a precise instruction into a coin flip.
+    """
+    tabs = _tabs()
+    assert match_tab(tabs, "salesforce.com") is None
+    assert match_tab(tabs, "example.com") is None
+
+    # A host that genuinely matches still wins outright.
+    picked = match_tab(tabs, "mail.google.com")
+    assert picked is not None and picked.host == "mail.google.com"
+
+
+async def test_an_empty_hint_means_the_tab_in_front_of_them():
+    """"Just use what I'm looking at" needs no new tab and no configuration."""
+    tabs = _tabs()
+    chosen = match_tab(tabs, "")
+    assert chosen is not None
+    # Whichever tab is foreground — never a fresh one, and never a guess at
+    # which product the presenter meant.
+    assert chosen in tabs
+
+
 async def test_tab_matching_defaults_to_what_theyre_looking_at():
     assert match_tab(_tabs(), "").index == 2
 
@@ -511,6 +537,23 @@ async def test_no_chrome_note_is_honest_about_a_deployed_backend(monkeypatch):
     )
     local = session._no_chrome_note()
     assert "--remote-debugging-port" in local
+
+
+async def test_a_failed_attach_never_launches_a_browser_instead(monkeypatch):
+    """On a server this used to try a *headed* launch and dump Playwright's
+    "no X server" banner into the UI. Attaching was asked for; if it can't
+    happen, say so in one sentence."""
+    from agent import browser as browser_mod
+
+    monkeypatch.setattr("agent.config.ATTACH_TO_CHROME", True)
+    monkeypatch.setattr("agent.config.CHROME_CDP_URL", "http://localhost:9")
+    monkeypatch.setattr(browser_mod, "chrome_binary", lambda: "")
+    session = browser_mod.BrowserSession()
+
+    with pytest.raises(browser_mod.NoBrowserAvailable) as raised:
+        await session.start(auto_launch=True)   # the demo-start path
+    assert "deployed" in str(raised.value) or "locally" in str(raised.value)
+    assert session._browser is None
 
 
 async def test_attach_only_never_spawns_a_driver_when_the_port_is_closed(monkeypatch):

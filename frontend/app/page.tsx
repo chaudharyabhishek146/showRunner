@@ -138,7 +138,8 @@ export default function Home() {
           chromeHint={w.chromeHint}
           chromeCommand={w.chromeCommand}
           tabsLoading={w.tabsLoading}
-          busy={busy || !w.connected}
+          busy={busy}
+          connected={w.connected}
           onRefreshTabs={w.requestTabs}
           onStart={w.start}
         />

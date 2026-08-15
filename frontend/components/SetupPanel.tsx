@@ -23,6 +23,10 @@ interface Props {
   chromeCommand: string;
   tabsLoading: boolean;
   busy: boolean;
+  /** Separate from `busy`: "no socket" and "a demo is running" look identical
+   *  to a disabled button, and telling the presenter "Running…" when nothing
+   *  is running sends them looking for a demo that never started. */
+  connected: boolean;
   onRefreshTabs: () => void;
   onStart: (request: DemoRequest) => void;
 }
@@ -43,6 +47,7 @@ export default function SetupPanel({
   chromeCommand,
   tabsLoading,
   busy,
+  connected,
   onRefreshTabs,
   onStart,
 }: Props) {
@@ -106,7 +111,7 @@ export default function SetupPanel({
 
   // The document is the only hard requirement: without it there's nothing to
   // plan from. An empty tab hint just means "use whatever is in front of me".
-  const ready = doc !== null && !busy && !working;
+  const ready = doc !== null && !busy && !working && connected;
 
   // Locked build: one demo, no inputs, identical every time. The presenter
   // gets a Start button and nothing they can accidentally change on stage.
@@ -125,9 +130,9 @@ export default function SetupPanel({
         <button
           className="btn btn--primary"
           onClick={() => onStart({ doc_id: "", focus: "", tab: "" })}
-          disabled={busy}
+          disabled={busy || !connected}
         >
-          {busy ? "Running…" : "Start walkthrough"}
+          {!connected ? "Connecting…" : busy ? "Running…" : "Start walkthrough"}
         </button>
       </section>
     );
@@ -272,7 +277,7 @@ export default function SetupPanel({
           }
           disabled={!ready}
         >
-          {busy ? "Running…" : "Start walkthrough"}
+          {!connected ? "Connecting…" : busy ? "Running…" : "Start walkthrough"}
         </button>
       </div>
     </section>

@@ -78,6 +78,12 @@ CHROME_BINARY = os.getenv("CHROME_BINARY", "")
 # Used only when attaching is off or the debug port isn't there. "chrome" drives
 # the real Chrome install, "msedge" drives Edge, empty uses bundled Chromium.
 BROWSER_CHANNEL = os.getenv("BROWSER_CHANNEL", "chrome")
+
+# An existing tab is always preferred, and an empty tab hint already means "the
+# one in front of me". This governs the remaining case: a hint that names a URL
+# nothing on screen matches. false navigates the current tab there instead of
+# adding to the presenter's tab strip.
+OPEN_NEW_TABS = os.getenv("OPEN_NEW_TABS", "true").lower() != "false"
 HEADLESS = os.getenv("HEADLESS", "false").lower() == "true"
 VIEWPORT_WIDTH = int(os.getenv("VIEWPORT_WIDTH", "1440"))
 VIEWPORT_HEIGHT = int(os.getenv("VIEWPORT_HEIGHT", "900"))

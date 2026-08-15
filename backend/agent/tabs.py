@@ -18,6 +18,9 @@ _STOPWORDS = {
     "a", "an", "and", "browser", "chrome", "demo", "do", "for", "give", "in",
     "into", "it", "me", "my", "of", "on", "open", "page", "please", "screen",
     "show", "site", "tab", "the", "this", "to", "walkthrough", "web", "window",
+    # Domain furniture. These appear in almost every host, so scoring on them
+    # matches everything — which is the same as matching nothing, but silently.
+    "com", "net", "org", "io", "co", "www", "app", "dev", "ai",
 }
 
 _URLISH = re.compile(r"^(https?://|[\w-]+(\.[\w-]+)+(/|$))", re.IGNORECASE)
@@ -89,6 +92,11 @@ def score_tab(tab: TabInfo, hint: str) -> int:
             score += 100
         elif host.endswith(f".{hint_host}") or hint_host.endswith(f".{host}"):
             score += 80
+        # A hint that names a host is a precise instruction, so the host
+        # comparison is the entire signal. Falling through to token matching
+        # would score "salesforce.com" against a YouTube tab on the strength of
+        # "com" — a substring of nearly every host on the internet.
+        return score + (1 if tab.active else 0)
 
     for token in set(_tokens(hint)):
         # The host is the strongest signal: a product's name is usually in it.
