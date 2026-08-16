@@ -27,18 +27,15 @@ jobs:
     steps:
       - name: Ping the backend every 2 minutes
         env:
-          # Set this under Settings -> Secrets and variables -> Actions ->
-          # Variables, e.g. https://showrunner-api.onrender.com — it is not a
-          # secret, and keeping it out of the file means forks and re-deploys
-          # don't need a code change.
-          BACKEND_URL: ${{ vars.BACKEND_URL }}
+          # Defaults to this deployment. Override without touching the file by
+          # setting a BACKEND_URL variable under Settings -> Secrets and
+          # variables -> Actions -> Variables — useful for a fork or a rename.
+          # A default rather than a hard requirement because the failure mode of
+          # requiring it is a failed run every five minutes, forever.
+          BACKEND_URL: ${{ vars.BACKEND_URL || 'https://showrunner-j83q.onrender.com' }}
         run: |
-          if [ -z "$BACKEND_URL" ]; then
-            echo "::error::Repository variable BACKEND_URL is not set — nothing to ping."
-            exit 1
-          fi
-
           target="${BACKEND_URL%/}/ping"
+          echo "Pinging $target"
           failures=0
 
           for attempt in 1 2 3; do
